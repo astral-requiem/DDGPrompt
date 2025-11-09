@@ -65,23 +65,23 @@ class Prompt(nn.Module):
 
             bs, len, dim = patches_data.size()
 
-            # mlp_patches_data = patches_data.view(bs * len, dim)
-            # mlp_patches_data = self.mlp_weight_prompt(mlp_patches_data)
-            # mlp_patches_data = mlp_patches_data.view(bs, len, dim)
+            mlp_patches_data = patches_data.view(bs * len, dim)
+            mlp_patches_data = self.mlp_weight_prompt(mlp_patches_data)
+            mlp_patches_data = mlp_patches_data.view(bs, len, dim)
 
-            # edge_weight = self.edge_weight_layer(patches_data[:, :, 0:self.channel_embedding_dim])  # bs,len,1
-            # edge_weight_patches_data = patches_data * edge_weight
-            #
-            # b = patches_data[:, :, 0:self.channel_embedding_dim]
-            # time_bias = self.time_bias_layer(b).squeeze()  # bs,2len,(1)
-            # delta_time = torch.from_numpy(batch_node_interact_times[:, np.newaxis] - neighbor_time).float().to(
-            #     self.device)
-            # delta_time = self.relu(delta_time + time_bias)
-            # time_mask = (neighbor_time == 0)
-            # time_fea = self.time_encoder(delta_time)
-            # time_fea[time_mask] = 0.0  # bs,2len,50
-            # time_bias_patches_data = patches_data.clone()  # 防止原地修改
-            # time_bias_patches_data[:, :,self.channel_embedding_dim:] = time_fea
+            edge_weight = self.edge_weight_layer(patches_data[:, :, 0:self.channel_embedding_dim])  # bs,len,1
+            edge_weight_patches_data = patches_data * edge_weight
+            
+            b = patches_data[:, :, 0:self.channel_embedding_dim]
+            time_bias = self.time_bias_layer(b).squeeze()  # bs,2len,(1)
+            delta_time = torch.from_numpy(batch_node_interact_times[:, np.newaxis] - neighbor_time).float().to(
+                self.device)
+            delta_time = self.relu(delta_time + time_bias)
+            time_mask = (neighbor_time == 0)
+            time_fea = self.time_encoder(delta_time)
+            time_fea[time_mask] = 0.0  # bs,2len,50
+            time_bias_patches_data = patches_data.clone() 
+            time_bias_patches_data[:, :,self.channel_embedding_dim:] = time_fea
 
             return a
         else:
@@ -104,103 +104,15 @@ class Prompt(nn.Module):
             time_fea = self.time_encoder(delta_time)
             time_fea[time_mask] = 0.0           # bs,2len,50
             time_fea = time_projection_layer(time_fea)
-            time_bias_patches_data = patches_data.clone()  # 防止原地修改
+            time_bias_patches_data = patches_data.clone() 
             time_bias_patches_data[:,:,2*self.channel_embedding_dim:3*self.channel_embedding_dim] = time_fea
 
 
             return a  +  1 * edge_weight_patches_data  +  1 * mlp_patches_data+ 1 * time_bias_patches_data
-            # lastfm
-            # return a  +  4 * edge_weight_patches_data  +  0.5 * mlp_patches_data+ 4 * time_bias_patches_data
 
 
 
 
-
-
-
-class TIG_Prompt(nn.Module):
-    def __init__(self, node_feat_dim:int, time_feat_dim:int):
-        super(TIG_Prompt, self).__init__()
-
-        self.mlp_weight_prompt = nn.Sequential(
-            nn.Linear(node_feat_dim+time_feat_dim, node_feat_dim),
-            nn.ReLU(),
-            nn.Linear(node_feat_dim, node_feat_dim)
-        )
-        self.feature_prompt = torch.nn.Parameter(torch.Tensor(1,node_feat_dim))
-        self.time_encoder = TimeEncoder(time_dim=time_feat_dim)
-
-        self.reset_parameters()
-        self.init_emb()
-
-    def set_device(self, device):
-        self.device = device
-
-
-    def reset_parameters(self):
-        glorot(self.feature_prompt)
-
-    def init_emb(self):
-        for m in self.modules():
-            if isinstance(m, Linear):
-                torch.nn.init.xavier_uniform_(m.weight.data)
-                if m.bias is not None:
-                    m.bias.data.fill_(0.0)
-
-    def add_tig_prompt(self,batch_src_node_embeddings, batch_dst_node_embeddings, neighbor_delta_times,src_num_patches = None,model=None):
-        # (bs,172)
-
-        if src_num_patches != None:
-            src_time_gap = neighbor_delta_times[:,:src_num_patches]  # (batch_size, 2num_neighbors)
-            des_time_gap = neighbor_delta_times[:,src_num_patches:]
-            last_src_time_gap = []
-            for row in src_time_gap:
-                # 找到小于阈值的元素
-                below_threshold = row[row < 10000]
-                if below_threshold.size > 0:
-                    last_src_time_gap.append(below_threshold[-1])  # 取最后一个小于阈值的值
-            last_src_time_gap = np.array(last_src_time_gap)
-            last_des_time_gap = []
-            for row in des_time_gap:
-                # 找到小于阈值的元素
-                below_threshold = row[row < 10000]
-                if below_threshold.size > 0:
-                    last_des_time_gap.append(below_threshold[-1])  # 取最后一个小于阈值的值
-            last_des_time_gap = np.array(last_des_time_gap)
-        elif model == "gm" or model == "tcl" :
-            bs,two_num_nei = neighbor_delta_times.shape   #(2_batch_size, num_neighbors)
-            num_ne = two_num_nei //2
-
-            src_time_gap = neighbor_delta_times[:,:num_ne]  # (batch_size, num_neighbors)
-            des_time_gap = neighbor_delta_times[:,num_ne:]
-
-            last_src_time_gap = src_time_gap[:, -1]  # (batch_size, 1)
-            last_des_time_gap = des_time_gap[:, -1]  # (batch_size, 1)
-
-        else:
-            two_bs,num_nei = neighbor_delta_times.shape   #(2_batch_size, num_neighbors)
-
-            bs = two_bs // 2
-
-            src_time_gap = neighbor_delta_times[:bs]        # (batch_size, num_neighbors)
-            des_time_gap = neighbor_delta_times[bs:]
-
-            last_src_time_gap = src_time_gap[:,-1]                #   (batch_size, 1)
-            last_des_time_gap = des_time_gap[:,-1]                  #   (batch_size, 1)
-
-        src_p_temporal = self.time_encoder(torch.from_numpy(last_src_time_gap).float().to(self.device))            # (bs,time_dim=50)
-        des_p_temporal = self.time_encoder(torch.from_numpy(last_des_time_gap).float().to(self.device))            # (bs,time_dim=50)
-        p_personal = self.feature_prompt.expand(src_p_temporal.shape[0],-1)
-
-        src_p_cat = torch.cat((p_personal,src_p_temporal),dim=1)
-        des_p_cat = torch.cat((p_personal,des_p_temporal),dim=1)
-
-        src_p = self.mlp_weight_prompt(src_p_cat)
-        des_p = self.mlp_weight_prompt(des_p_cat)
-
-        return  batch_src_node_embeddings+src_p,batch_dst_node_embeddings+des_p
-
-class dyg_prompt(nn.Module):
     def __init__(self, node_feat_dim: int = 172,time_feat_dim: int = 100,alpha: int = 2):
         super(dyg_prompt, self).__init__()
 
